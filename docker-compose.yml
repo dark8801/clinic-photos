@@ -1,0 +1,14 @@
+services:
+  clinic-photos:
+    build: .
+    container_name: clinic-photos
+    restart: unless-stopped
+    ports:
+      - "5100:5000"
+    volumes:
+      # 照片存储目录 - 按年/月/日/客户姓名组织
+      - /volume1/XYYM/顾客案例:/photos
+      # 数据库存储目录
+      - /volume2/docker/clinic-photos/data:/data
+    environment:
+      - TZ=Asia/Shanghai

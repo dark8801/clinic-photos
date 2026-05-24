@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+
+{% block title %}客户列表{% endblock %}
+{% block nav_customers %}active{% endblock %}
+
+{% block content %}
+<!-- 扫描提示（仅管理员可见） -->
+{% if is_admin %}
+<div class="scan-banner" id="scan-banner" style="display:none;">
+    <div class="info">
+        📁 检测到 <strong id="unscanned-count">0</strong> 张未扫描照片，可能是从其他方式添加的
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="doScan()">扫描导入</button>
+</div>
+<div class="scan-result" id="scan-result"></div>
+{% endif %}
+
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+    <h2 style="font-size:18px;">所有客户</h2>
+    {% if is_admin %}
+    <a href="/scan" class="btn btn-outline btn-sm" onclick="event.preventDefault();doScan();">📁 扫描已有照片</a>
+    {% endif %}
+</div>
+
+<div class="search-box">
+    <span class="search-icon">🔍</span>
+    <form method="GET" action="/customers" style="display:flex;">
+        <input type="text" name="q" placeholder="搜索客户姓名" value="{{ q }}" style="flex:1;">
+        {% if q %}
+        <a href="/customers" class="btn btn-sm btn-outline" style="margin-left:8px;">清除</a>
+        {% endif %}
+    </form>
+</div>
+
+{% if customers %}
+<div class="customer-list">
+    {% for c in customers %}
+    <a href="{{ url_for('customer', name=c.customer_name) }}" class="customer-list-item">
+        <div class="info">
+            <h3>{{ c.customer_name }}</h3>
+            <div class="meta">{{ c.first_seen }} ~ {{ c.last_seen }} · 共 {{ c.photo_count }} 张</div>
+        </div>
+        <div class="badge">{{ c.photo_count }}</div>
+    </a>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-state">
+    <div class="icon">👤</div>
+    <p>{% if q %}没有找到匹配 "{{ q }}" 的客户{% else %}暂无客户记录{% endif %}</p>
+    {% if is_admin %}
+    <a href="/upload" class="btn btn-primary">上传第一张照片</a>
+    {% endif %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if is_admin %}
+<script>
+function checkUnscanned(){
+    fetch('/api/stats').then(r=>r.json()).then(d=>{
+        if(d.unscanned>0){
+            document.getElementById('unscanned-count').textContent=d.unscanned;
+            document.getElementById('scan-banner').style.display='flex';
+        }
+    });
+}
+checkUnscanned();
+
+function doScan(){
+    fetch('/scan').then(r=>r.json()).then(d=>{
+        const el=document.getElementById('scan-result');
+        el.classList.add('show');
+        el.textContent='扫描完成: 导入 '+d.imported+' 张，跳过 '+d.skipped+' 张';
+        document.getElementById('scan-banner').style.display='none';
+        setTimeout(()=>location.reload(),1200);
+    });
+}
+</script>
+{% endif %}
+{% endblock %}

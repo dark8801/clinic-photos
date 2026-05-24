@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block title %}搜索结果{% endblock %}
+
+{% block content %}
+<h2 style="font-size:18px;margin-bottom:14px;">
+    {% if q %}搜索 "{{ q }}"{% elif date_from or date_to %}按日期筛选{% else %}搜索{% endif %}
+    <span style="font-weight:400;color:var(--text2);font-size:14px;margin-left:6px;">
+        共 {{ total }} 张
+    </span>
+</h2>
+
+<!-- 搜索表单 -->
+<form action="/search" method="GET" style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;align-items:end;">
+    <div style="flex:1;min-width:150px;">
+        <label style="font-size:11px;color:var(--text2);">客户姓名</label>
+        <input type="text" name="q" value="{{ q }}" placeholder="输入客户姓名"
+               style="width:100%;padding:7px 10px;border:2px solid var(--border);border-radius:8px;font-size:13px;outline:none;">
+    </div>
+    <div>
+        <label style="font-size:11px;color:var(--text2);">开始日期</label>
+        <input type="date" name="from" value="{{ date_from }}"
+               style="width:140px;padding:7px 10px;border:2px solid var(--border);border-radius:8px;font-size:13px;outline:none;">
+    </div>
+    <div>
+        <label style="font-size:11px;color:var(--text2);">结束日期</label>
+        <input type="date" name="to" value="{{ date_to }}"
+               style="width:140px;padding:7px 10px;border:2px solid var(--border);border-radius:8px;font-size:13px;outline:none;">
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm">搜索</button>
+    {% if q or date_from or date_to %}
+    <a href="/search" class="btn btn-outline btn-sm">清除</a>
+    {% endif %}
+</form>
+
+{% if results %}
+{% for date_str, customers in results.items() %}
+<div class="customer-card">
+    <div class="customer-header">
+        <div class="customer-name">
+            <a href="{{ url_for('view_date', year=date_str[:4]|int, month=date_str[5:7]|int, day=date_str[8:10]|int) }}">
+                📅 {{ date_str }}
+            </a>
+        </div>
+        <div class="customer-photo-count">
+            {% set day_count = customers|sum(attribute='1')|map('length')|sum %}
+            {{ day_count }} 张
+        </div>
+    </div>
+    {% for name, photos in customers.items() %}
+    <div style="margin-bottom:8px;">
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px;">
+            <a href="{{ url_for('customer', name=name) }}">{{ name }}</a>
+            <span style="font-weight:400;color:var(--text2);font-size:12px;"> ({{ photos|length }}张)</span>
+        </div>
+        <div class="photo-grid">
+            {% for photo in photos %}
+            <div class="photo-item">
+                <img src="{{ url_for('serve_thumb', filepath=photo.file_path.rsplit('.', 1)[0] + '.jpg') }}"
+                     onclick="openLightbox('{{ url_for('serve_photo', filepath=photo.file_path) }}', '{{ name }} · {{ photo.photo_time }}')"
+                     loading="lazy">
+                <div class="photo-time">{{ photo.photo_time }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endfor %}
+{% else %}
+<div class="empty-state">
+    <div class="icon">🔍</div>
+    <p>{% if q or date_from or date_to %}没有找到匹配的照片{% else %}输入姓名或日期范围来搜索{% endif %}</p>
+</div>
+{% endif %}
+{% endblock %}

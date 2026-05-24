@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - 客户照片管理</title>
+    <style>
+        :root {
+            --primary: #e8567e;
+            --primary-light: #f5a3b8;
+            --primary-dark: #c9365c;
+            --bg: #f4f5f7;
+            --card: #ffffff;
+            --text: #2d3436;
+            --text2: #636e72;
+            --border: #e9ecef;
+            --red: #ff6b6b;
+            --green: #00b894;
+        }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+            min-height:100vh; display:flex; align-items:center; justify-content:center;
+            background:linear-gradient(135deg,#fce4ec,#f8bbd0);
+            -webkit-font-smoothing: antialiased;
+        }
+        .login-card {
+            background:var(--card); border-radius:18px; padding:32px;
+            box-shadow:0 8px 40px rgba(0,0,0,0.12); width:340px; text-align:center;
+        }
+        .login-card h1 { font-size:22px; margin-bottom:4px; color:var(--text); }
+        .login-card .subtitle { font-size:13px; color:var(--text2); margin-bottom:24px; }
+        .login-card .error { color:var(--red); font-size:13px; margin-bottom:12px; }
+        .login-card .msg { color:var(--green); font-size:13px; margin-bottom:12px; }
+        .form-group {
+            margin-bottom:14px; text-align:left;
+        }
+        .form-group label {
+            display:block; font-size:13px; font-weight:500; margin-bottom:5px; color:var(--text2);
+        }
+        .form-group input {
+            width:100%; padding:10px 12px; border:2px solid var(--border);
+            border-radius:8px; font-size:15px; outline:none; transition:border-color .2s;
+        }
+        .form-group input:focus { border-color:var(--primary); }
+        .btn-login {
+            width:100%; padding:10px; border:none; border-radius:8px;
+            font-size:15px; font-weight:600; cursor:pointer; transition:.2s;
+            background:var(--primary); color:white;
+        }
+        .btn-login:hover { background:var(--primary-dark); }
+        .btn-login:active { transform:scale(0.98); }
+    </style>
+</head>
+<body>
+<div class="login-card">
+    <h1>📸 客户照片管理</h1>
+    <p class="subtitle">请输入账号和密码登录</p>
+
+    {% if error %}
+    <div class="error">{{ error }}</div>
+    {% endif %}
+    {% if msg %}
+    <div class="msg">{{ msg }}</div>
+    {% endif %}
+
+    <form method="POST">
+        <div class="form-group">
+            <label>账号</label>
+            <input type="text" name="username" placeholder="请输入账号" required autofocus>
+        </div>
+
+        <div class="form-group">
+            <label>密码</label>
+            <input type="password" name="password" placeholder="请输入密码" required>
+        </div>
+
+        <button type="submit" class="btn-login">登 录</button>
+    </form>
+</div>
+</body>
+</html>

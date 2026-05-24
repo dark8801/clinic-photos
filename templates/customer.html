@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}{{ name }}{% endblock %}
+
+{% block content %}
+<!-- 返回和统计 -->
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px;">
+    <div>
+        <a href="/customers" style="color:var(--text2);text-decoration:none;font-size:14px;">← 返回客户列表</a>
+        <h2 style="font-size:22px;margin-top:4px;">{{ name }}</h2>
+    </div>
+    <div class="stats-bar" style="margin:0;">
+        <div class="stat-chip">照片 <strong>{{ total_photos }}</strong> 张</div>
+        <div class="stat-chip">就诊 <strong>{{ total_dates }}</strong> 次</div>
+    </div>
+</div>
+
+{% for date_str, photos in by_date.items() %}
+<div class="customer-card">
+    <div class="customer-header">
+        <div class="customer-name">
+            <a href="{{ url_for('view_date', year=date_str[:4]|int, month=date_str[5:7]|int, day=date_str[8:10]|int) }}">
+                📅 {{ date_str }}
+            </a>
+        </div>
+        <div class="customer-photo-count">{{ photos|length }} 张</div>
+    </div>
+    <div class="photo-grid">
+        {% for photo in photos %}
+        <div class="photo-item">
+            <img src="{{ url_for('serve_thumb', filepath=photo.file_path.rsplit('.', 1)[0] + '.jpg') }}"
+                 alt="{{ name }}"
+                 onclick="openLightbox('{{ url_for('serve_photo', filepath=photo.file_path) }}', '{{ name }} · {{ date_str }} · {{ photo.photo_time }}')"
+                 loading="lazy">
+            <div class="photo-time">{{ photo.photo_time }}</div>
+            {% if is_admin %}
+            <button class="photo-delete"
+                    onclick="event.stopPropagation(); askDelete('/delete/{{ photo.id }}', '{{ name }}')"
+                    title="删除">✕</button>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endfor %}
+
+{% if not by_date %}
+<div class="empty-state">
+    <div class="icon">📷</div>
+    <p>暂无照片记录</p>
+    {% if is_admin %}
+    <a href="{{ url_for('upload', name=name) }}" class="btn btn-primary">为 {{ name }} 上传照片</a>
+    {% endif %}
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>{% block title %}客户照片管理{% endblock %}</title>
+    <style>
+        :root {
+            --primary: #e8567e;
+            --primary-light: #f5a3b8;
+            --primary-dark: #c9365c;
+            --bg: #f4f5f7;
+            --card: #ffffff;
+            --text: #2d3436;
+            --text2: #636e72;
+            --border: #e9ecef;
+            --shadow: 0 2px 8px rgba(0,0,0,0.08);
+            --green: #00b894;
+            --red: #ff6b6b;
+            --orange: #e17055;
+        }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+            background: var(--bg); color: var(--text); line-height:1.6;
+            -webkit-font-smoothing: antialiased;
+        }
+        .navbar {
+            background: var(--primary); color:white; padding:0 16px;
+            height:52px; display:flex; align-items:center; justify-content:space-between;
+            position:sticky; top:0; z-index:100;
+            box-shadow: 0 2px 10px rgba(232,86,126,0.3);
+        }
+        .navbar h1 { font-size:17px; font-weight:600; white-space:nowrap; }
+        .nav-center {
+            flex:1; display:flex; justify-content:center; padding:0 12px;
+        }
+        .nav-center form {
+            display:flex; position:relative;
+        }
+        .nav-center input {
+            padding:6px 12px 6px 32px; border:none; border-radius:20px;
+            font-size:13px; outline:none; width:220px; background:rgba(255,255,255,0.2);
+            color:white;
+        }
+        .nav-center input::placeholder { color:rgba(255,255,255,0.6); }
+        .nav-center input:focus { background:rgba(255,255,255,0.3); width:280px; }
+        .nav-center .search-icon {
+            position:absolute; left:10px; top:50%; transform:translateY(-50%);
+            font-size:14px; color:rgba(255,255,255,0.7); pointer-events:none;
+        }
+        .nav-links { display:flex; gap:2px; }
+        .nav-links a {
+            color:rgba(255,255,255,0.85); text-decoration:none;
+            padding:6px 10px; border-radius:8px; font-size:13px; transition:.2s;
+        }
+        .nav-links a:hover, .nav-links a.active { background:rgba(255,255,255,0.2); color:white; }
+        .role-badge {
+            background:rgba(255,255,255,0.15); border-radius:6px;
+            padding:2px 8px; font-size:11px; margin-right:4px; white-space:nowrap;
+        }
+        .role-badge.admin { background:rgba(255,255,255,0.25); }
+        .role-badge.viewer { background:rgba(255,255,255,0.1); }
+        .container { max-width:960px; margin:0 auto; padding:16px 16px 80px; }
+        .date-nav {
+            display:flex; align-items:center; justify-content:space-between;
+            background:var(--card); border-radius:12px; padding:10px 14px;
+            margin-bottom:16px; box-shadow:var(--shadow);
+        }
+        .date-nav .date-display { font-size:18px; font-weight:700; color:var(--primary-dark); }
+        .date-nav .date-display .weekday { font-size:12px; font-weight:400; color:var(--text2); margin-left:6px; }
+        .date-nav .date-buttons { display:flex; gap:6px; }
+        .date-nav .date-buttons a,
+        .date-nav .date-buttons button {
+            display:inline-flex; align-items:center; justify-content:center;
+            width:34px; height:34px; border-radius:8px; border:1px solid var(--border);
+            background:var(--card); color:var(--text); text-decoration:none; font-size:16px;
+            cursor:pointer; transition:.2s;
+        }
+        .date-nav .date-buttons a:hover, .date-nav .date-buttons button:hover {
+            background:var(--primary); color:white; border-color:var(--primary);
+        }
+        .btn-today { width:auto!important; padding:0 12px!important; font-size:12px!important; font-weight:500; }
+        .btn-today.is-today { background:var(--primary-light); color:white; border-color:var(--primary-light); cursor:default; }
+        .stats-bar { display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap; }
+        .stat-chip {
+            background:var(--card); border-radius:20px; padding:5px 14px;
+            font-size:12px; color:var(--text2); box-shadow:var(--shadow);
+        }
+        .stat-chip strong { color:var(--primary-dark); font-weight:600; }
+        .customer-card {
+            background:var(--card); border-radius:14px; padding:14px;
+            margin-bottom:14px; box-shadow:var(--shadow);
+        }
+        .customer-header {
+            display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;
+        }
+        .customer-name { font-size:16px; font-weight:600; }
+        .customer-name a { color:inherit; text-decoration:none; }
+        .customer-name a:hover { color:var(--primary); }
+        .customer-photo-count {
+            font-size:11px; color:var(--text2); background:var(--bg);
+            padding:2px 10px; border-radius:10px;
+        }
+        .photo-grid {
+            display:grid; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:6px;
+        }
+        .photo-item {
+            position:relative; border-radius:10px; overflow:hidden;
+            aspect-ratio:1; cursor:pointer; background:var(--bg);
+        }
+        .photo-item img { width:100%; height:100%; object-fit:cover; display:block; transition:transform .3s; }
+        .photo-item:hover img { transform:scale(1.05); }
+        .photo-item .photo-time {
+            position:absolute; bottom:0; left:0; right:0;
+            background:linear-gradient(transparent,rgba(0,0,0,0.6));
+            color:white; font-size:10px; padding:10px 4px 3px; text-align:center;
+        }
+        .photo-item .photo-delete {
+            position:absolute; top:3px; right:3px; width:22px; height:22px;
+            border-radius:50%; background:rgba(0,0,0,0.5); color:white;
+            border:none; cursor:pointer; font-size:12px; line-height:22px;
+            text-align:center; display:none;
+        }
+        .photo-item:hover .photo-delete { display:block; }
+        .empty-state { text-align:center; padding:50px 20px; color:var(--text2); }
+        .empty-state .icon { font-size:42px; margin-bottom:12px; }
+        .empty-state p { font-size:14px; margin-bottom:16px; }
+        .btn {
+            display:inline-flex; align-items:center; gap:5px;
+            padding:8px 20px; border-radius:8px; font-size:13px; font-weight:500;
+            text-decoration:none; border:none; cursor:pointer; transition:.2s;
+        }
+        .btn-primary { background:var(--primary); color:white; }
+        .btn-primary:hover { background:var(--primary-dark); }
+        .btn-outline { background:var(--card); color:var(--text); border:1px solid var(--border); }
+        .btn-outline:hover { border-color:var(--primary); color:var(--primary); }
+        .btn-sm { padding:5px 12px; font-size:12px; }
+        .btn-success { background:var(--green); color:white; }
+        .btn-danger { background:var(--red); color:white; }
+        .upload-card {
+            background:var(--card); border-radius:14px; padding:20px;
+            box-shadow:var(--shadow); max-width:480px; margin:16px auto;
+        }
+        .upload-card h2 { font-size:17px; margin-bottom:16px; }
+        .form-group { margin-bottom:14px; }
+        .form-group label { display:block; font-size:13px; font-weight:500; margin-bottom:5px; color:var(--text2); }
+        .form-group input[type="text"], .form-group input[type="password"],
+        .form-group input[type="date"] {
+            width:100%; padding:9px 12px; border:2px solid var(--border);
+            border-radius:8px; font-size:15px; outline:none; transition:border-color .2s;
+        }
+        .form-group input:focus { border-color:var(--primary); }
+        .autocomplete-list {
+            position:absolute; top:100%; left:0; right:0; background:var(--card);
+            border:2px solid var(--primary-light); border-top:none;
+            border-radius:0 0 8px 8px; max-height:180px; overflow-y:auto; z-index:10; display:none;
+        }
+        .autocomplete-list.show { display:block; }
+        .autocomplete-item { padding:7px 12px; cursor:pointer; font-size:14px; }
+        .autocomplete-item:hover { background:var(--bg); color:var(--primary); }
+        .drop-zone {
+            border:2px dashed var(--border); border-radius:10px;
+            padding:24px; text-align:center; color:var(--text2); cursor:pointer; transition:.2s;
+        }
+        .drop-zone.dragover { border-color:var(--primary); background:rgba(232,86,126,0.05); }
+        .drop-zone .icon { font-size:32px; margin-bottom:6px; }
+        .drop-zone p { font-size:13px; }
+        .preview-area { display:grid; grid-template-columns:repeat(auto-fill,minmax(90px,1fr)); gap:6px; margin-top:10px; }
+        .preview-item { position:relative; aspect-ratio:1; border-radius:6px; overflow:hidden; }
+        .preview-item img { width:100%; height:100%; object-fit:cover; }
+        .preview-item .remove-btn {
+            position:absolute; top:2px; right:2px; width:18px; height:18px;
+            border-radius:50%; background:rgba(0,0,0,0.5); color:white;
+            border:none; cursor:pointer; font-size:10px; line-height:18px; text-align:center;
+        }
+        .lightbox {
+            position:fixed; inset:0; background:rgba(0,0,0,0.9); z-index:200;
+            display:none; align-items:center; justify-content:center; cursor:zoom-out;
+        }
+        .lightbox.show { display:flex; }
+        .lightbox img { max-width:95vw; max-height:92vh; object-fit:contain; border-radius:4px; }
+        .lightbox .info-bar {
+            position:absolute; bottom:0; left:0; right:0;
+            background:linear-gradient(transparent,rgba(0,0,0,0.8));
+            color:white; padding:18px; text-align:center; font-size:13px;
+        }
+        .search-box { position:relative; margin-bottom:14px; }
+        .search-box input {
+            width:100%; padding:9px 12px 9px 34px; border:2px solid var(--border);
+            border-radius:8px; font-size:14px; outline:none; background:var(--card);
+        }
+        .search-box input:focus { border-color:var(--primary); }
+        .search-box .search-icon {
+            position:absolute; left:11px; top:50%; transform:translateY(-50%);
+            font-size:14px; color:var(--text2);
+        }
+        .customer-list { display:grid; gap:6px; }
+        .customer-list-item {
+            display:flex; align-items:center; justify-content:space-between;
+            background:var(--card); border-radius:10px; padding:12px 14px;
+            box-shadow:var(--shadow); text-decoration:none; color:inherit; transition:.2s;
+        }
+        .customer-list-item:hover { transform:translateY(-1px); box-shadow:0 4px 12px rgba(0,0,0,0.12); }
+        .customer-list-item .info h3 { font-size:15px; font-weight:600; }
+        .customer-list-item .info .meta { font-size:11px; color:var(--text2); margin-top:1px; }
+        .customer-list-item .badge {
+            background:var(--primary-light); color:white; padding:3px 10px;
+            border-radius:16px; font-size:12px; font-weight:500;
+        }
+        .confirm-overlay {
+            position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:300;
+            display:none; align-items:center; justify-content:center;
+        }
+        .confirm-overlay.show { display:flex; }
+        .confirm-dialog {
+            background:var(--card); border-radius:14px; padding:20px;
+            max-width:320px; width:90%; text-align:center;
+            box-shadow:0 10px 40px rgba(0,0,0,0.2);
+        }
+        .confirm-dialog h3 { font-size:15px; margin-bottom:6px; }
+        .confirm-dialog p { font-size:13px; color:var(--text2); margin-bottom:16px; }
+        .confirm-dialog .buttons { display:flex; gap:8px; justify-content:center; }
+        .fab-upload {
+            position:fixed; bottom:20px; right:20px; width:52px; height:52px;
+            border-radius:14px; background:var(--primary); color:white; border:none;
+            font-size:26px; box-shadow:0 4px 16px rgba(232,86,126,0.4);
+            cursor:pointer; z-index:90; display:flex; align-items:center;
+            justify-content:center; text-decoration:none; transition:.2s;
+        }
+        .fab-upload:hover { transform:scale(1.05); }
+
+        /* 扫描横幅 */
+        .scan-banner {
+            background:linear-gradient(135deg,#fff3e0,#ffe0b2); border-radius:12px;
+            padding:14px 18px; margin-bottom:16px; display:flex; align-items:center;
+            justify-content:space-between; gap:12px;
+        }
+        .scan-banner .info { font-size:13px; color:#e17055; flex:1; }
+        .scan-banner .info strong { color:#d63031; }
+
+        /* 登录页 */
+        .login-page {
+            min-height:100vh; display:flex; align-items:center; justify-content:center;
+            background:linear-gradient(135deg,#fce4ec,#f8bbd0);
+        }
+        .login-card {
+            background:var(--card); border-radius:18px; padding:32px;
+            box-shadow:0 8px 40px rgba(0,0,0,0.12); width:340px; text-align:center;
+        }
+        .login-card h1 { font-size:22px; margin-bottom:4px; }
+        .login-card .subtitle { font-size:13px; color:var(--text2); margin-bottom:20px; }
+        .login-card .error { color:var(--red); font-size:13px; margin-bottom:12px; }
+        .login-card .msg { color:var(--green); font-size:13px; margin-bottom:12px; }
+
+        /* 扫描结果 */
+        .scan-result {
+            background:#e6fff5; color:#00a878; padding:8px 14px; border-radius:8px;
+            font-size:13px; margin-bottom:12px; display:none;
+        }
+        .scan-result.show { display:block; }
+
+        /* 修改密码 */
+        .pwd-card {
+            background:var(--card); border-radius:14px; padding:24px;
+            box-shadow:var(--shadow); max-width:380px; margin:40px auto;
+        }
+        .pwd-card h2 { font-size:17px; margin-bottom:16px; text-align:center; }
+
+        @media(min-width:768px) {
+            .photo-grid { grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); }
+            .container { padding:20px 24px 80px; }
+        }
+        @media(max-width:480px) {
+            .navbar h1 { font-size:14px; }
+            .nav-center input { width:140px; }
+            .nav-center input:focus { width:160px; }
+            .nav-links a { padding:6px 7px; font-size:12px; }
+            .photo-grid { grid-template-columns:repeat(3,1fr); gap:3px; }
+            .customer-card { padding:10px; }
+        }
+    </style>
+</head>
+<body>
+
+{% if not logged_in and request.endpoint not in ['login'] %}
+<!-- 未登录状态不渲染导航 -->
+{% else %}
+<nav class="navbar">
+    <h1>📸 客户照片</h1>
+    <div class="nav-center">
+        <form action="/search" method="GET">
+            <span class="search-icon">🔍</span>
+            <input type="text" name="q" placeholder="搜索客户姓名..." value="{{ request.args.get('q','') }}">
+        </form>
+    </div>
+    <div class="nav-links">
+        <a href="/" class="{% block nav_home %}{% endblock %}">今日</a>
+        <a href="/customers" class="{% block nav_customers %}{% endblock %}">客户</a>
+        {% if is_admin %}
+        <a href="/upload" class="{% block nav_upload %}{% endblock %}">上传</a>
+        {% endif %}
+        {% if is_admin %}<a href="/change_password">🔑</a>{% endif %}
+        <a href="/logout">退出</a>
+    </div>
+</nav>
+{% endif %}
+
+<div class="container">
+{% block content %}{% endblock %}
+</div>
+
+<!-- 浮动上传按钮（仅管理员） -->
+{% if is_admin and request.endpoint not in ['login','upload'] %}
+<a href="/upload" class="fab-upload" title="上传照片">+</a>
+{% endif %}
+
+<!-- 灯箱 -->
+<div class="lightbox" id="lightbox" onclick="closeLightbox()">
+    <img id="lightbox-img" src="" alt="">
+    <div class="info-bar" id="lightbox-info"></div>
+</div>
+
+<!-- 确认删除弹窗 -->
+<div class="confirm-overlay" id="confirm-overlay">
+    <div class="confirm-dialog">
+        <h3>确认删除</h3>
+        <p id="confirm-msg">确定要删除这张照片吗？此操作不可撤销。</p>
+        <div class="buttons">
+            <button class="btn btn-outline btn-sm" onclick="closeConfirm()">取消</button>
+            <form id="confirm-form" method="POST" style="display:inline;">
+                <button type="submit" class="btn btn-danger btn-sm">删除</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+// 灯箱
+function openLightbox(src, info) {
+    document.getElementById('lightbox-img').src = src;
+    document.getElementById('lightbox-info').textContent = info || '';
+    document.getElementById('lightbox').classList.add('show');
+    document.body.style.overflow = 'hidden';
+}
+function closeLightbox() {
+    document.getElementById('lightbox').classList.remove('show');
+    document.body.style.overflow = '';
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeLightbox(); closeConfirm(); } });
+
+// 确认删除
+function askDelete(url, name) {
+    document.getElementById('confirm-msg').textContent = '确定要删除 ' + (name || '这张照片') + ' 吗？此操作不可撤销。';
+    document.getElementById('confirm-form').action = url;
+    document.getElementById('confirm-overlay').classList.add('show');
+}
+function closeConfirm() {
+    document.getElementById('confirm-overlay').classList.remove('show');
+}
+</script>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

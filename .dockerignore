@@ -1,0 +1,10 @@
+# 忽略文件
+*.pyc
+__pycache__
+data/
+photos/
+.git
+.gitignore
+*.md
+.DS_Store
+Thumbs.db

@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+
+{% block title %}上传照片{% endblock %}
+{% block nav_upload %}active{% endblock %}
+
+{% block content %}
+<div class="upload-card">
+    <h2>📷 上传客户照片</h2>
+
+    <form id="upload-form" method="POST" enctype="multipart/form-data">
+        <div class="form-group" style="position:relative;">
+            <label>客户姓名</label>
+            <input type="text" id="customer-name" name="customer_name"
+                   placeholder="输入客户姓名" autocomplete="off"
+                   required value="{{ request.args.get('name', '') }}">
+            <div class="autocomplete-list" id="autocomplete"></div>
+        </div>
+
+        <div class="form-group">
+            <label>选择照片（支持多选）</label>
+            <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+                <div class="icon">📸</div>
+                <p>点击选择照片或拖拽到此处</p>
+                <p style="font-size:12px;color:var(--text-secondary);margin-top:4px;">
+                    支持 JPG、PNG、GIF、WebP 格式
+                </p>
+            </div>
+            <input type="file" id="file-input" name="photos" multiple accept="image/*" style="display:none">
+            <div class="preview-area" id="preview-area"></div>
+        </div>
+
+        <button type="submit" class="btn btn-primary" id="submit-btn" style="width:100%;justify-content:center;" disabled>
+            上传照片
+        </button>
+    </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const nameInput = document.getElementById('customer-name');
+const autoList = document.getElementById('autocomplete');
+const fileInput = document.getElementById('file-input');
+const dropZone = document.getElementById('drop-zone');
+const previewArea = document.getElementById('preview-area');
+const submitBtn = document.getElementById('submit-btn');
+let selectedFiles = [];
+
+// 客户名自动补全
+nameInput.addEventListener('input', function() {
+    const q = this.value.trim();
+    if (q.length === 0) {
+        autoList.classList.remove('show');
+        return;
+    }
+    fetch('/api/search?q=' + encodeURIComponent(q))
+        .then(r => r.json())
+        .then(names => {
+            if (names.length === 0) {
+                autoList.classList.remove('show');
+                return;
+            }
+            autoList.innerHTML = names.map(n =>
+                `<div class="autocomplete-item" onclick="selectName('${n.replace(/'/g, "\\'")}')">${n}</div>`
+            ).join('');
+            autoList.classList.add('show');
+        });
+});
+
+nameInput.addEventListener('blur', () => {
+    setTimeout(() => autoList.classList.remove('show'), 200);
+});
+
+function selectName(name) {
+    nameInput.value = name;
+    autoList.classList.remove('show');
+}
+
+// 文件选择
+fileInput.addEventListener('change', function() {
+    addFiles(this.files);
+});
+
+// 拖拽上传
+dropZone.addEventListener('dragover', e => {
+    e.preventDefault();
+    dropZone.classList.add('dragover');
+});
+
+dropZone.addEventListener('dragleave', e => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+});
+
+dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    const files = e.dataTransfer.files;
+    addFiles(files);
+});
+
+function addFiles(fileList) {
+    for (const file of fileList) {
+        if (file.type.startsWith('image/')) {
+            selectedFiles.push(file);
+        }
+    }
+    updatePreview();
+}
+
+function updatePreview() {
+    previewArea.innerHTML = '';
+    selectedFiles.forEach((file, idx) => {
+        const reader = new FileReader();
+        reader.onload = e => {
+            const div = document.createElement('div');
+            div.className = 'preview-item';
+            div.innerHTML = `
+                <img src="${e.target.result}" alt="">
+                <button class="remove-btn" onclick="removeFile(${idx})" type="button">✕</button>
+            `;
+            previewArea.appendChild(div);
+        };
+        reader.readAsDataURL(file);
+    });
+    submitBtn.disabled = selectedFiles.length === 0 || !nameInput.value.trim();
+}
+
+function removeFile(idx) {
+    selectedFiles.splice(idx, 1);
+    updatePreview();
+}
+
+// 监听名字变化，控制按钮状态
+nameInput.addEventListener('input', () => {
+    submitBtn.disabled = selectedFiles.length === 0 || !nameInput.value.trim();
+});
+
+// 覆盖表单提交
+document.getElementById('upload-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    if (selectedFiles.length === 0 || !nameInput.value.trim()) return;
+
+    const formData = new FormData();
+    formData.append('customer_name', nameInput.value.trim());
+    selectedFiles.forEach(f => formData.append('photos', f));
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = '上传中...';
+
+    fetch('/upload', {
+        method: 'POST',
+        body: formData
+    }).then(r => {
+        if (r.ok) {
+            // 跟随重定向
+            return r.text();
+        }
+        throw new Error('上传失败');
+    }).then(() => {
+        // 提交成功，刷新到日期页
+        window.location.href = '/';
+    }).catch(err => {
+        alert('上传失败，请重试');
+        submitBtn.disabled = false;
+        submitBtn.textContent = '上传照片';
+    });
+});
+</script>
+{% endblock %}

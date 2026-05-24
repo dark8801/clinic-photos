@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+
+{% block title %}{{ date.strftime('%Y-%m-%d') }}{% endblock %}
+
+{% block content %}
+<!-- 日期导航 -->
+<div class="date-nav">
+    <div class="date-buttons">
+        <a href="{{ url_for('view_date', year=prev_day.year, month=prev_day.month, day=prev_day.day) }}">‹</a>
+    </div>
+    <div class="date-display">
+        {{ date.strftime('%Y年%-m月%-d日') }}
+        <span class="weekday">
+            {% if date == today %}
+            今天
+            {% else %}
+            {{ ['周一','周二','周三','周四','周五','周六','周日'][date.weekday()] }}
+            {% endif %}
+        </span>
+    </div>
+    <div class="date-buttons">
+        {% if date != today %}
+        <a href="{{ url_for('view_date', year=today.year, month=today.month, day=today.day) }}" class="btn-today">今天</a>
+        {% else %}
+        <span class="btn-today is-today">今天</span>
+        {% endif %}
+        <a href="{{ url_for('view_date', year=next_day.year, month=next_day.month, day=next_day.day) }}">›</a>
+    </div>
+</div>
+
+<!-- 统计 -->
+<div class="stats-bar">
+    <div class="stat-chip">客户 <strong>{{ customer_count }}</strong> 人</div>
+    <div class="stat-chip">照片 <strong>{{ photo_count }}</strong> 张</div>
+</div>
+
+<!-- 扫描提示（仅管理员可见） -->
+{% if is_admin %}
+<div class="scan-banner" id="scan-banner" style="display:none;">
+    <div class="info">
+        📁 检测到 <strong id="unscanned-count">0</strong> 张未扫描照片，可能是从其他方式添加的
+    </div>
+    <button class="btn btn-primary btn-sm" onclick="doScan()">扫描导入</button>
+</div>
+<div class="scan-result" id="scan-result"></div>
+{% endif %}
+
+{% if customers %}
+{% for name, photos in customers.items() %}
+<div class="customer-card">
+    <div class="customer-header">
+        <div class="customer-name">
+            <a href="{{ url_for('customer', name=name) }}">{{ name }}</a>
+        </div>
+        <div class="customer-photo-count">{{ photos|length }} 张</div>
+    </div>
+    <div class="photo-grid">
+        {% for photo in photos %}
+        <div class="photo-item">
+            <img src="{{ url_for('serve_thumb', filepath=photo.file_path.rsplit('.', 1)[0] + '.jpg') }}"
+                 alt="{{ name }}"
+                 onclick="openLightbox('{{ url_for('serve_photo', filepath=photo.file_path) }}', '{{ name }} · {{ photo.photo_time }}')"
+                 loading="lazy">
+            <div class="photo-time">{{ photo.photo_time }}</div>
+            {% if is_admin %}
+            <button class="photo-delete"
+                    onclick="event.stopPropagation(); askDelete('/delete/{{ photo.id }}', '{{ name }}')"
+                    title="删除">✕</button>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endfor %}
+{% else %}
+<div class="empty-state">
+    <div class="icon">📋</div>
+    <p>今天还没有客户照片</p>
+    {% if is_admin %}
+    <a href="{{ url_for('upload') }}" class="btn btn-primary">开始上传</a>
+    {% endif %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if is_admin %}
+<script>
+function checkUnscanned(){
+    fetch('/api/stats').then(r=>r.json()).then(d=>{
+        if(d.unscanned>0){
+            document.getElementById('unscanned-count').textContent=d.unscanned;
+            document.getElementById('scan-banner').style.display='flex';
+        }else{
+            document.getElementById('scan-banner').style.display='none';
+        }
+    });
+}
+checkUnscanned();
+
+function doScan(){
+    const btn=event.target;
+    btn.disabled=true; btn.textContent='扫描中...';
+    fetch('/scan').then(r=>r.json()).then(d=>{
+        btn.disabled=false; btn.textContent='扫描导入';
+        const el=document.getElementById('scan-result');
+        el.classList.add('show');
+        el.textContent='扫描完成: 导入 '+d.imported+' 张，跳过 '+d.skipped+' 张'+(d.errors>0?'，失败 '+d.errors+' 张':'');
+        document.getElementById('scan-banner').style.display='none';
+        setTimeout(()=>location.reload(),1500);
+    });
+}
+</script>
+{% endif %}
+{% endblock %}
