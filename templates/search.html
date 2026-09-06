@@ -43,8 +43,7 @@
             </a>
         </div>
         <div class="customer-photo-count">
-            {% set day_count = customers|sum(attribute='1')|map('length')|sum %}
-            {{ day_count }} 张
+            {{ day_counts[date_str] }} 张
         </div>
     </div>
     {% for name, photos in customers.items() %}
@@ -56,9 +55,16 @@
         <div class="photo-grid">
             {% for photo in photos %}
             <div class="photo-item">
+                {% if is_video(photo.file_path) %}
+                <video src="{{ url_for('serve_photo', filepath=photo.file_path) }}"
+                       muted preload="metadata" playsinline
+                       onclick="openLightbox('{{ url_for('serve_photo', filepath=photo.file_path) }}', '{{ name }} · {{ photo.photo_time }}', true)"></video>
+                <span class="video-badge">▶</span>
+                {% else %}
                 <img src="{{ url_for('serve_thumb', filepath=photo.file_path.rsplit('.', 1)[0] + '.jpg') }}"
                      onclick="openLightbox('{{ url_for('serve_photo', filepath=photo.file_path) }}', '{{ name }} · {{ photo.photo_time }}')"
                      loading="lazy">
+                {% endif %}
                 <div class="photo-time">{{ photo.photo_time }}</div>
             </div>
             {% endfor %}

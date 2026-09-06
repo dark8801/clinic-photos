@@ -2,6 +2,14 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# 替换 Debian apt 源为清华镜像（解决国内网络下 apt-get 卡住问题）
+RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources; \
+    fi; \
+    if [ -f /etc/apt/sources.list ]; then \
+        sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list; \
+    fi
+
 # 安装系统依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libjpeg62-turbo \
@@ -22,4 +30,4 @@ EXPOSE 5000
 
 VOLUME ["/photos", "/data"]
 
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "120", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "600", "app:app"]

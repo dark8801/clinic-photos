@@ -22,10 +22,10 @@
                 <div class="icon">📸</div>
                 <p>点击选择照片或拖拽到此处</p>
                 <p style="font-size:12px;color:var(--text-secondary);margin-top:4px;">
-                    支持 JPG、PNG、GIF、WebP 格式
+                    支持 JPG、PNG、GIF、WebP 图片及 MP4、MOV 等视频
                 </p>
             </div>
-            <input type="file" id="file-input" name="photos" multiple accept="image/*" style="display:none">
+            <input type="file" id="file-input" name="photos" multiple accept="image/*,video/*" style="display:none">
             <div class="preview-area" id="preview-area"></div>
         </div>
 
@@ -101,7 +101,7 @@ dropZone.addEventListener('drop', e => {
 
 function addFiles(fileList) {
     for (const file of fileList) {
-        if (file.type.startsWith('image/')) {
+        if (file.type.startsWith('image/') || file.type.startsWith('video/')) {
             selectedFiles.push(file);
         }
     }
@@ -115,8 +115,12 @@ function updatePreview() {
         reader.onload = e => {
             const div = document.createElement('div');
             div.className = 'preview-item';
+            const isVideo = file.type.startsWith('video/');
+            const mediaHtml = isVideo
+                ? `<video src="${e.target.result}" muted></video>`
+                : `<img src="${e.target.result}" alt="">`;
             div.innerHTML = `
-                <img src="${e.target.result}" alt="">
+                ${mediaHtml}
                 <button class="remove-btn" onclick="removeFile(${idx})" type="button">✕</button>
             `;
             previewArea.appendChild(div);

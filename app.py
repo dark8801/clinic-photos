@@ -2,11 +2,15 @@
 """医美门诊客户照片管理系统 - 支持管理员和只读账户"""
 
 import os
+import re
+import time
 import sqlite3
 import datetime
 import uuid
 import shutil
 import hashlib
+import threading
+import json
 from pathlib import Path
 from functools import wraps
 
@@ -22,12 +26,19 @@ THUMBS_DIR = os.path.join(PHOTOS_DIR, '.thumbs')
 THUMB_SIZE = (600, 600)
 DATABASE = os.path.join(DATA_DIR, 'clinic.db')
 ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'}
-MAX_FILE_SIZE = 100 * 1024 * 1024
+VIDEO_EXTENSIONS = {'mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v', '3gp', 'flv', 'wmv', 'ts', 'm2ts', 'mpg', 'mpeg'}
+SUPPORTED_EXTENSIONS = ALLOWED_EXTENSIONS | VIDEO_EXTENSIONS
+MAX_FILE_SIZE = 2048 * 1024 * 1024  # 2GB，支持大视频
 SESSION_KEY = os.environ.get('SESSION_KEY', 'clinic_photos_secret_key_2025')
+SCAN_STATE_FILE = os.path.join(DATA_DIR, '.scan_state')
+DISK_COUNT_FILE = os.path.join(DATA_DIR, '.disk_count')
+DB_BATCH_SIZE = 2000
 
 app = Flask(__name__)
 app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
 app.secret_key = SESSION_KEY
+
+_scan_lock = threading.Lock()
 
 
 # ============================================================
@@ -46,7 +57,6 @@ def init_accounts():
     os.makedirs(DATA_DIR, exist_ok=True)
     f = get_accounts_file()
     if not os.path.exists(f):
-        # 账户格式: 用户名|密码哈希|角色  (role: admin / viewer)
         with open(f, 'w', encoding='utf-8') as fh:
             fh.write(f"admin|{hash_password('admin')}|admin\n")
             fh.write(f"xyym|{hash_password('1766')}|viewer\n")
@@ -66,12 +76,10 @@ def verify_account(username, password):
             if not line:
                 continue
             parts = line.split('|')
-            # 新格式: 用户名|密码哈希|角色
             if len(parts) == 3:
                 stored_user, stored_hash, role = parts
                 if stored_user == username and stored_hash == pwd_hash:
                     return role
-            # 兼容旧格式: 密码哈希|角色
             elif len(parts) == 2:
                 stored_hash, role = parts
                 if stored_hash == pwd_hash:
@@ -179,10 +187,22 @@ def init_db():
 # 工具函数
 # ============================================================
 def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+    if '.' not in filename:
+        return False
+    ext = filename.rsplit('.', 1)[1].lower()
+    return ext in SUPPORTED_EXTENSIONS
+
+
+def is_video_file(path):
+    """判断文件是否为视频（供模板使用）"""
+    if '.' not in path:
+        return False
+    ext = path.rsplit('.', 1)[1].lower()
+    return ext in VIDEO_EXTENSIONS
 
 
 def get_photo_datetime(filepath):
+    """从 EXIF 获取照片拍摄时间，用于上传路由"""
     try:
         img = Image.open(filepath)
         exif = img.getexif()
@@ -227,62 +247,349 @@ def format_size(size_bytes):
 
 
 # ============================================================
-# 扫描已有照片
+# 路径解析 - 从目录结构提取客户名和日期
 # ============================================================
+# 预编译正则表达式（性能优化）
+_re_digits_only = re.compile(r'^[\d_\-\.]+$')
+_re_month = re.compile(r'^\d+月')
+_re_filename_date = re.compile(r'^(\d{4})[_\-](\d{2})[_\-](\d{2})')
+_re_month_after = re.compile(r'^(\d+)月')
+
+def _is_name_like(s):
+    """判断目录名是否像客户姓名（而非日期或系统目录）"""
+    if not s or len(s) > 50:
+        return False
+    if s in ('术前', '术后', '.thumbs', '新建文件夹'):
+        return False
+    if _re_digits_only.match(s):
+        return False
+    if _re_month.match(s):
+        return False
+    if re.match(r'^\d{4}', s):
+        return False
+    if '平板' in s or '备份' in s:
+        return False
+    if s[0] == '.':
+        return False
+    return True
+
+
+def _extract_customer_name(parts):
+    """从路径中提取客户姓名，从文件名向前回溯找到第一个像人名的目录"""
+    for i in range(len(parts) - 2, -1, -1):
+        if _is_name_like(parts[i]):
+            return parts[i]
+    return '未分类'
+
+
+def _extract_date_from_path(parts):
+    """从目录结构提取日期。
+
+    支持格式:
+    - YYYY/MM/DD/...          (2024-2026 标准格式)
+    - YYYY/X月之后/X.X/...   (2023 旧格式, 如 10月之后/10.1)
+    - YYYY/MM/X.X/...        (混合格式, 如 01/1.28)
+    """
+    year = None
+    year_idx = -1
+    for i, p in enumerate(parts):
+        if p.isdigit() and len(p) == 4 and 2020 <= int(p) <= 2030:
+            year = int(p)
+            year_idx = i
+            break
+
+    if year is None:
+        return None
+
+    month = None
+    day = None
+
+    for j in range(year_idx + 1, len(parts)):
+        d = parts[j]
+
+        # "X月之后" 或 "X月" 格式
+        m = _re_month_after.match(d)
+        if m:
+            month = int(m.group(1))
+            continue
+
+        # 数字格式（可能含点号，如 "1.10"、"24"）
+        clean = d.replace('.', '')
+        if clean.isdigit():
+            num = int(clean)
+            if month is None and 1 <= num <= 12:
+                month = num
+                continue
+            if month is not None and day is None:
+                # 提取日期（处理 "X.Y" 格式，取点号后面的数字作为日期）
+                if '.' in d:
+                    day = int(d.split('.')[-1])
+                else:
+                    day = num
+                if 1 <= day <= 31:
+                    break
+        elif month is not None:
+            # 遇到非数字目录，停止日期查找
+            break
+
+    if month and day:
+        try:
+            return datetime.date(year, month, day)
+        except ValueError:
+            pass
+    return None
+
+
+def _extract_date_from_filename(filename):
+    """从文件名中提取日期，如 '2026_05_02_09_06_IMG_6661.jpg'"""
+    m = _re_filename_date.match(filename)
+    if m:
+        try:
+            return datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except ValueError:
+            pass
+    return None
+
+
+def _extract_metadata_fast(abs_path, rel_path, mtime):
+    """高性能版 _extract_metadata，直接接收 mtime 避免 stat 重复调用。"""
+    parts = Path(rel_path).parts
+
+    customer_name = _extract_customer_name(parts)
+    photo_date = _extract_date_from_path(parts)
+
+    if not photo_date:
+        photo_date = _extract_date_from_filename(parts[-1])
+
+    try:
+        dt = datetime.datetime.fromtimestamp(mtime)
+        if not photo_date:
+            photo_date = dt.date()
+        photo_time = dt.strftime('%H:%M:%S')
+    except Exception:
+        if not photo_date:
+            photo_date = datetime.date.today()
+        photo_time = '00:00:00'
+
+    return customer_name, photo_date, photo_time
+
+
+def _extract_metadata(abs_path, rel_path):
+    """从文件路径提取 (客户姓名, 拍摄日期, 拍摄时间)。
+
+    优先级: 目录结构 > 文件名 > 文件修改时间
+    """
+    parts = Path(rel_path).parts
+
+    customer_name = _extract_customer_name(parts)
+
+    # 从目录结构提取日期
+    photo_date = _extract_date_from_path(parts)
+
+    # 回退: 从文件名提取
+    if not photo_date:
+        photo_date = _extract_date_from_filename(parts[-1])
+
+    # 回退: 文件修改时间
+    try:
+        mt = os.path.getmtime(abs_path)
+        if not photo_date:
+            photo_date = datetime.datetime.fromtimestamp(mt).date()
+        photo_time = datetime.datetime.fromtimestamp(mt).strftime('%H:%M:%S')
+    except Exception:
+        if not photo_date:
+            photo_date = datetime.date.today()
+        photo_time = '00:00:00'
+
+    return customer_name, photo_date, photo_time
+
+
+# ============================================================
+# 扫描状态管理
+# ============================================================
+def _update_scan_state(**kwargs):
+    with _scan_lock:
+        kwargs['updated'] = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        with open(SCAN_STATE_FILE, 'w') as f:
+            json.dump(kwargs, f, ensure_ascii=False)
+
+
+def _get_scan_state():
+    try:
+        if os.path.exists(SCAN_STATE_FILE):
+            with open(SCAN_STATE_FILE) as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {'running': False, 'imported': 0, 'skipped': 0, 'errors': 0, 'scanned': 0}
+
+
+def _get_disk_count():
+    """读取缓存的照片总数"""
+    try:
+        if os.path.exists(DISK_COUNT_FILE):
+            with open(DISK_COUNT_FILE) as f:
+                return int(f.read().strip())
+    except Exception:
+        pass
+    return 0
+
+
+def _update_disk_count():
+    """统计磁盘上的照片总数并缓存"""
+    count = 0
+    if os.path.isdir(PHOTOS_DIR):
+        for root, dirs, files in os.walk(PHOTOS_DIR):
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
+            count += sum(1 for f in files
+                         if os.path.splitext(f)[1].lower() in SUPPORTED_EXTENSIONS)
+    with open(DISK_COUNT_FILE, 'w') as f:
+        f.write(str(count))
+    return count
+
 def scan_existing_photos():
+    """扫描 PHOTOS_DIR 下所有照片，导入到数据库（高性能批量版）。
+
+    兼容多种目录格式:
+    - 2024-2026: YYYY/MM/DD/客户名/photo.jpg
+    - 2023: YYYY/X月之后/X.X/客户名/photo.jpg
+    - 平板备份: YYYY/平板内照片.../photo.jpg -> 归为"未分类"
+    - 散落文件: 5-2/, WIN-F8468AN6QKE/ -> 归为"未分类"
+
+    缩略图采用懒加载策略，扫描时不生成，首次查看时按需生成。
+
+    性能优化:
+    - 批量 INSERT（executemany）减少 SQLite 事务开销
+    - 时间窗口状态更新（每 3 秒一次）替代逐目录更新
+    - 预编译正则替代运行时编译
+    - 一次性 os.stat 获取 size+mtime 避免重复系统调用
+    """
     conn = get_db()
     existing = set(row[0] for row in conn.execute('SELECT file_path FROM photos').fetchall())
-    imported, skipped, errors = 0, 0, 0
+    conn.close()
 
-    if not os.path.isdir(PHOTOS_DIR):
-        return imported, skipped, errors
+    imported, skipped, errors, scanned = 0, 0, 0, 0
+    batch_records = []
+    last_status_time = 0.0
+    now_str_cache = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
-    for root, dirs, files in os.walk(PHOTOS_DIR):
-        if '.thumbs' in root.split(os.sep):
-            continue
-        for fname in files:
-            ext = os.path.splitext(fname)[1].lower()
-            if ext not in ALLOWED_EXTENSIONS:
-                continue
-            abs_path = os.path.join(root, fname)
-            rel_path = os.path.relpath(abs_path, PHOTOS_DIR).replace('\\', '/')
-            if rel_path in existing:
-                skipped += 1
-                continue
-            try:
-                file_size = os.path.getsize(abs_path)
-                if file_size < 1024:
+    _update_scan_state(running=True, imported=0, skipped=0, errors=0, scanned=0)
+
+    try:
+        if not os.path.isdir(PHOTOS_DIR):
+            _update_scan_state(running=False, imported=0, skipped=0, errors=0,
+                               scanned=0, message='照片目录不存在')
+            return
+
+        conn = get_db()
+
+        for root, dirs, files in os.walk(PHOTOS_DIR):
+            # 跳过隐藏目录（.thumbs, .DS_Store 等）
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
+
+            for fname in files:
+                scanned += 1
+
+                # 快速扩展名过滤
+                dot = fname.rfind('.')
+                if dot < 1:
                     continue
-                photo_dt = get_photo_datetime(abs_path)
-                photo_date = photo_dt.date()
-                photo_time = photo_dt.strftime('%H:%M:%S')
-                parts = Path(rel_path).parts
-                customer_name = '未分类'
-                if len(parts) >= 5:
-                    customer_name = parts[3]
-                elif len(parts) >= 4 and not parts[2].isdigit():
-                    customer_name = parts[2]
-                elif len(parts) >= 2 and not parts[0].isdigit():
-                    customer_name = parts[0]
-                thumb_rel_dir = os.path.join('.thumbs', os.path.dirname(rel_path))
-                thumb_filename = fname.rsplit('.', 1)[0] + '.jpg'
-                thumb_path = os.path.join(PHOTOS_DIR, thumb_rel_dir, thumb_filename)
-                create_thumbnail(abs_path, thumb_path)
-                upload_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                conn.execute('''
+                ext = fname[dot:].lower()
+                if ext not in SUPPORTED_EXTENSIONS:
+                    continue
+
+                abs_path = os.path.join(root, fname)
+                rel_path = abs_path.replace(PHOTOS_DIR, '').lstrip(os.sep).replace('\\', '/')
+
+                # 已在数据库中，跳过
+                if rel_path in existing:
+                    skipped += 1
+                    continue
+
+                try:
+                    # 一次性获取 stat 信息（size + mtime）
+                    st = os.stat(abs_path)
+                    file_size = st.st_size
+                    if file_size < 1024:
+                        continue
+
+                    customer_name, photo_date, photo_time = _extract_metadata_fast(
+                        abs_path, rel_path, st.st_mtime
+                    )
+
+                    batch_records.append((
+                        customer_name, rel_path,
+                        photo_date.strftime('%Y-%m-%d'), photo_time,
+                        now_str_cache, file_size
+                    ))
+                    existing.add(rel_path)
+                    imported += 1
+
+                    # 批量提交: 每 DB_BATCH_SIZE 条
+                    if len(batch_records) >= DB_BATCH_SIZE:
+                        conn.executemany('''
+                            INSERT INTO photos (customer_name, file_path, photo_date, photo_time,
+                                                upload_time, file_size)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        ''', batch_records)
+                        conn.commit()
+                        batch_records = []
+
+                except Exception as e:
+                    errors += 1
+                    if errors <= 20:
+                        print(f'扫描错误: {rel_path} -> {e}')
+
+            # 时间窗口状态更新（每 3 秒一次）
+            current_time = time.time()
+            if current_time - last_status_time >= 3.0:
+                last_status_time = current_time
+                if batch_records:
+                    conn.executemany('''
+                        INSERT INTO photos (customer_name, file_path, photo_date, photo_time,
+                                            upload_time, file_size)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    ''', batch_records)
+                    conn.commit()
+                    batch_records = []
+                _update_scan_state(running=True, imported=imported,
+                                   skipped=skipped, errors=errors, scanned=scanned)
+
+        # 最终提交剩余记录
+        if batch_records:
+            conn.executemany('''
+                INSERT INTO photos (customer_name, file_path, photo_date, photo_time,
+                                    upload_time, file_size)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', batch_records)
+            conn.commit()
+
+        conn.close()
+
+        # 更新磁盘缓存数量
+        _update_disk_count()
+
+        _update_scan_state(running=False, imported=imported, skipped=skipped,
+                           errors=errors, scanned=scanned,
+                           message=f'扫描完成: 导入 {imported:,} 张, '
+                                   f'跳过 {skipped:,} 张, 错误 {errors} 张')
+
+    except Exception as e:
+        # 出错前尽量提交已收集的记录
+        if batch_records:
+            try:
+                conn.executemany('''
                     INSERT INTO photos (customer_name, file_path, photo_date, photo_time,
                                         upload_time, file_size)
                     VALUES (?, ?, ?, ?, ?, ?)
-                ''', (customer_name, rel_path, photo_date.strftime('%Y-%m-%d'),
-                      photo_time, upload_time, file_size))
-                existing.add(rel_path)
-                imported += 1
-            except Exception as e:
-                errors += 1
-
-    conn.commit()
-    conn.close()
-    return imported, skipped, errors
+                ''', batch_records)
+                conn.commit()
+            except Exception:
+                pass
+        _update_scan_state(running=False, imported=imported, skipped=skipped,
+                           errors=errors, scanned=scanned,
+                           message=f'扫描异常中断: {str(e)}')
+        print(f'扫描异常: {e}')
 
 
 # ============================================================
@@ -454,17 +761,21 @@ def search():
         ORDER BY photo_date DESC, customer_name, photo_time DESC LIMIT 200
     ''', params).fetchall()
     grouped = {}
+    day_counts = {}
     for r in rows:
         d = r['photo_date']
         if d not in grouped:
             grouped[d] = {}
+            day_counts[d] = 0
         name = r['customer_name']
         if name not in grouped[d]:
             grouped[d][name] = []
         grouped[d][name].append(dict(r))
+        day_counts[d] += 1
     conn.close()
     return render_template('search.html',
                            results=grouped,
+                           day_counts=day_counts,
                            q=q, date_from=date_from, date_to=date_to,
                            total=len(rows))
 
@@ -510,10 +821,11 @@ def upload():
             final_path = os.path.join(abs_dir, unique_name)
             shutil.move(temp_path, final_path)
 
-            thumb_rel_dir = os.path.join('.thumbs', rel_dir)
-            thumb_filename = unique_name.rsplit('.', 1)[0] + '.jpg'
-            thumb_path = os.path.join(PHOTOS_DIR, thumb_rel_dir, thumb_filename)
-            create_thumbnail(final_path, thumb_path)
+            if ext in ALLOWED_EXTENSIONS:
+                thumb_rel_dir = os.path.join('.thumbs', rel_dir)
+                thumb_filename = unique_name.rsplit('.', 1)[0] + '.jpg'
+                thumb_path = os.path.join(PHOTOS_DIR, thumb_rel_dir, thumb_filename)
+                create_thumbnail(final_path, thumb_path)
 
             file_size = os.path.getsize(final_path)
             rel_path = rel_dir + '/' + unique_name
@@ -541,8 +853,36 @@ def upload():
 @app.route('/scan')
 @admin_required
 def scan_photos():
-    imported, skipped, errors = scan_existing_photos()
-    return jsonify({'imported': imported, 'skipped': skipped, 'errors': errors})
+    """启动后台扫描，立即返回"""
+    state = _get_scan_state()
+    if state.get('running'):
+        return jsonify(state)
+
+    t = threading.Thread(target=scan_existing_photos, daemon=True)
+    t.start()
+
+    return jsonify({
+        'running': True, 'imported': 0, 'skipped': 0,
+        'errors': 0, 'scanned': 0, 'message': '扫描已开始'
+    })
+
+
+@app.route('/api/scan_status')
+@login_required
+def scan_status():
+    """查询扫描进度"""
+    state = _get_scan_state()
+    # 检测过期状态（超过 5 分钟未更新视为已停止）
+    if state.get('running') and 'updated' in state:
+        try:
+            updated = datetime.datetime.strptime(state['updated'], '%Y-%m-%d %H:%M:%S')
+            if (datetime.datetime.now() - updated).total_seconds() > 300:
+                state['running'] = False
+                state['message'] = '扫描可能已中断（超过 5 分钟未更新）'
+                _update_scan_state(**state)
+        except Exception:
+            pass
+    return jsonify(state)
 
 
 @app.route('/delete/<int:photo_id>', methods=['POST'])
@@ -597,12 +937,35 @@ def serve_photo(filepath):
 @app.route('/t/<path:filepath>')
 @login_required
 def serve_thumb(filepath):
-    abs_path = os.path.join(PHOTOS_DIR, '.thumbs', filepath)
-    if not os.path.exists(abs_path):
-        abs_path = os.path.join(PHOTOS_DIR, filepath)
-        if not os.path.exists(abs_path):
-            abort(404)
-    return send_file(abs_path)
+    """提供缩略图，如不存在则按需生成（懒加载）"""
+    thumb_abs = os.path.join(PHOTOS_DIR, '.thumbs', filepath)
+
+    if not os.path.exists(thumb_abs):
+        # 找到原始照片文件
+        thumb_base = os.path.splitext(os.path.basename(filepath))[0]
+        photo_rel_dir = os.path.dirname(filepath)
+        photo_dir_abs = os.path.join(PHOTOS_DIR, photo_rel_dir)
+
+        found_original = None
+        if os.path.isdir(photo_dir_abs):
+            for ext in ALLOWED_EXTENSIONS:
+                candidate = os.path.join(photo_dir_abs, thumb_base + '.' + ext)
+                if os.path.exists(candidate):
+                    found_original = candidate
+                    break
+
+        if found_original:
+            os.makedirs(os.path.dirname(thumb_abs), exist_ok=True)
+            create_thumbnail(found_original, thumb_abs)
+
+    if os.path.exists(thumb_abs):
+        return send_file(thumb_abs)
+
+    # 缩略图生成失败，回退到原图
+    abs_path = os.path.join(PHOTOS_DIR, filepath)
+    if os.path.exists(abs_path):
+        return send_file(abs_path)
+    abort(404)
 
 
 # ============================================================
@@ -631,14 +994,7 @@ def api_stats():
     total_customers = conn.execute('SELECT COUNT(DISTINCT customer_name) as c FROM photos').fetchone()['c']
     conn.close()
 
-    disk_count = 0
-    if os.path.isdir(PHOTOS_DIR):
-        for root, dirs, files in os.walk(PHOTOS_DIR):
-            if '.thumbs' in root.split(os.sep):
-                continue
-            for f in files:
-                if os.path.splitext(f)[1].lower() in ALLOWED_EXTENSIONS:
-                    disk_count += 1
+    disk_count = _get_disk_count()
 
     return jsonify({
         'total_photos': total_photos,
@@ -646,6 +1002,14 @@ def api_stats():
         'disk_files': disk_count,
         'unscanned': max(0, disk_count - total_photos)
     })
+
+
+@app.route('/api/count_disk')
+@admin_required
+def count_disk():
+    """手动触发磁盘照片计数（较慢）"""
+    count = _update_disk_count()
+    return jsonify({'disk_files': count})
 
 
 # ============================================================
@@ -663,6 +1027,7 @@ def forbidden(e):
 def inject_globals():
     return {
         'format_size': format_size,
+        'is_video': is_video_file,
         'now': datetime.datetime.now(),
         'logged_in': session.get('logged_in', False),
         'username': session.get('username', ''),

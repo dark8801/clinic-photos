@@ -4,13 +4,24 @@
 {% block nav_customers %}active{% endblock %}
 
 {% block content %}
-<!-- 扫描提示（仅管理员可见） -->
+<!-- 扫描横幅（仅管理员可见） -->
 {% if is_admin %}
 <div class="scan-banner" id="scan-banner" style="display:none;">
     <div class="info">
-        📁 检测到 <strong id="unscanned-count">0</strong> 张未扫描照片，可能是从其他方式添加的
+        <span id="scan-icon">📁</span>
+        <span id="scan-text">检测到未扫描的照片，点击下方按钮导入数据库</span>
     </div>
-    <button class="btn btn-primary btn-sm" onclick="doScan()">扫描导入</button>
+    <button class="btn btn-primary btn-sm" id="scan-btn" onclick="doScan()">开始扫描导入</button>
+</div>
+<div class="scan-progress" id="scan-progress" style="display:none;">
+    <div class="progress-header">
+        <span id="progress-text">正在扫描...</span>
+        <span id="progress-stats"></span>
+    </div>
+    <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="progress-bar" style="width:0%"></div>
+    </div>
+    <div class="progress-detail" id="progress-detail"></div>
 </div>
 <div class="scan-result" id="scan-result"></div>
 {% endif %}
@@ -57,26 +68,112 @@
 
 {% block scripts %}
 {% if is_admin %}
+<style>
+.scan-progress {
+    background:var(--card); border-radius:12px;
+    padding:16px 18px; margin-bottom:16px;
+    box-shadow:var(--shadow);
+}
+.progress-header {
+    display:flex; justify-content:space-between; align-items:center;
+    margin-bottom:8px; font-size:13px;
+}
+.progress-header #progress-text { font-weight:600; color:var(--primary-dark); }
+.progress-header #progress-stats { color:var(--text2); }
+.progress-bar-bg {
+    height:8px; background:var(--bg); border-radius:4px; overflow:hidden;
+}
+.progress-bar-fill {
+    height:100%; background:var(--primary); border-radius:4px;
+    transition: width 0.5s ease;
+}
+.progress-detail {
+    margin-top:6px; font-size:12px; color:var(--text2); text-align:center;
+}
+</style>
 <script>
+let pollTimer = null;
+
 function checkUnscanned(){
     fetch('/api/stats').then(r=>r.json()).then(d=>{
         if(d.unscanned>0){
-            document.getElementById('unscanned-count').textContent=d.unscanned;
+            document.getElementById('scan-text').innerHTML =
+                '检测到 <strong>' + d.unscanned + '</strong> 张未导入的照片，点击下方按钮导入数据库';
             document.getElementById('scan-banner').style.display='flex';
+        }
+        // 同时检查是否有正在运行的扫描
+        checkScanStatus();
+    });
+}
+
+function checkScanStatus(){
+    fetch('/api/scan_status').then(r=>r.json()).then(d=>{
+        if(d.running){
+            showProgress(d);
+            startPolling();
         }
     });
 }
-checkUnscanned();
 
 function doScan(){
     fetch('/scan').then(r=>r.json()).then(d=>{
-        const el=document.getElementById('scan-result');
-        el.classList.add('show');
-        el.textContent='扫描完成: 导入 '+d.imported+' 张，跳过 '+d.skipped+' 张';
-        document.getElementById('scan-banner').style.display='none';
-        setTimeout(()=>location.reload(),1200);
+        if(d.running){
+            showProgress(d);
+            startPolling();
+            document.getElementById('scan-banner').style.display='none';
+        } else {
+            alert(d.message || '扫描启动失败');
+        }
     });
 }
+
+function showProgress(d){
+    document.getElementById('scan-progress').style.display='block';
+    document.getElementById('scan-banner').style.display='none';
+
+    const total = d.scanned + d.imported + d.skipped;
+    let pct = 0;
+    if(d.imported + d.skipped > 0){
+        pct = Math.round((d.imported + d.skipped) / total * 100);
+        if(isNaN(pct) || !isFinite(pct)) pct = 0;
+    }
+
+    document.getElementById('progress-text').textContent =
+        d.message || (d.running ? '正在扫描导入...' : '扫描完成');
+    document.getElementById('progress-stats').textContent =
+        '已导入: ' + d.imported.toLocaleString();
+    document.getElementById('progress-bar').style.width = Math.min(pct, 100) + '%';
+    document.getElementById('progress-detail').textContent =
+        '已扫描 ' + (d.scanned||0).toLocaleString() + ' 个文件 · ' +
+        '导入 ' + d.imported.toLocaleString() + ' 张 · ' +
+        '跳过 ' + d.skipped.toLocaleString() + ' 张 · ' +
+        '错误 ' + (d.errors||0) + ' 张';
+}
+
+function startPolling(){
+    if(pollTimer) return;
+    pollTimer = setInterval(()=>{
+        fetch('/api/scan_status').then(r=>r.json()).then(d=>{
+            showProgress(d);
+            if(!d.running){
+                clearInterval(pollTimer);
+                pollTimer = null;
+                if(d.message){
+                    const el = document.getElementById('scan-result');
+                    el.classList.add('show');
+                    el.textContent = d.message;
+                    // 刷新页面显示新数据
+                    setTimeout(()=>location.reload(), 2000);
+                }
+            }
+        }).catch(()=>{
+            clearInterval(pollTimer);
+            pollTimer = null;
+        });
+    }, 2000);
+}
+
+checkUnscanned();
 </script>
 {% endif %}
 {% endblock %}
