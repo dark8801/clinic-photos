@@ -17,6 +17,12 @@
         </div>
 
         <div class="form-group">
+            <label>归档日期（默认今天，可改为历史日期）</label>
+            <input type="date" id="upload-date" name="upload_date"
+                   value="{{ now.strftime('%Y-%m-%d') }}">
+        </div>
+
+        <div class="form-group">
             <label>选择照片（支持多选）</label>
             <div class="drop-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
                 <div class="icon">📸</div>
@@ -147,6 +153,10 @@ document.getElementById('upload-form').addEventListener('submit', function(e) {
 
     const formData = new FormData();
     formData.append('customer_name', nameInput.value.trim());
+    const dateInput = document.getElementById('upload-date');
+    if (dateInput && dateInput.value) {
+        formData.append('upload_date', dateInput.value);
+    }
     selectedFiles.forEach(f => formData.append('photos', f));
 
     submitBtn.disabled = true;

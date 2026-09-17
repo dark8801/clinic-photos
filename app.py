@@ -801,6 +801,15 @@ def upload():
         temp_dir = os.path.join(DATA_DIR, 'temp_upload')
         os.makedirs(temp_dir, exist_ok=True)
 
+        # 读取用户手动指定的归档日期（可选），为空则用照片 EXIF/修改时间
+        upload_date_str = request.form.get('upload_date', '').strip()
+        upload_date = None
+        if upload_date_str:
+            try:
+                upload_date = datetime.datetime.strptime(upload_date_str, '%Y-%m-%d').date()
+            except ValueError:
+                upload_date = None
+
         for file in files:
             if not file or not allowed_file(file.filename):
                 continue
@@ -809,6 +818,9 @@ def upload():
             photo_dt = get_photo_datetime(temp_path)
             photo_date = photo_dt.date()
             photo_time = photo_dt.strftime('%H:%M:%S')
+            # 用户手动指定日期时，覆盖归档日期（时间仍用照片自身时间）
+            if upload_date is not None:
+                photo_date = upload_date
             last_photo_date = photo_date
 
             ext = file.filename.rsplit('.', 1)[1].lower()
